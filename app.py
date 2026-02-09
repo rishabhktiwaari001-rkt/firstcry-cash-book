@@ -14,32 +14,31 @@ def save_entry(data):
     # Append to file
     df_history.to_csv(HISTORY_FILE, mode='a', index=False, header=not file_exists)
 
-# --- COLORING FUNCTION (No Matplotlib Needed) ---
+# --- COLORING FUNCTION ---
 def color_variance(val):
-    """
-    Colors negative values RED and positive values GREEN.
-    """
     color = ''
     if isinstance(val, (int, float)):
-        if val < -0.1: # Negative (Shortage)
+        if val < -0.1: # Shortage
             color = 'background-color: #ffcccc; color: black'
-        elif val > 0.1: # Positive (Excess)
+        elif val > 0.1: # Excess
             color = 'background-color: #ccffcc; color: black'
     return color
 
 # --- SIDEBAR TOOLS ---
 st.sidebar.header("🛠️ Admin Controls")
+if st.sidebar.button("🔄 Force Reload App"):
+    st.cache_data.clear()
+    st.rerun()
+
 if st.sidebar.button("🗑️ Reset All History"):
     if os.path.exists(HISTORY_FILE):
         os.remove(HISTORY_FILE)
-        st.sidebar.success("History cleared!")
+        st.sidebar.success("History cleared! You can start fresh.")
         st.rerun()
-    else:
-        st.sidebar.info("No history file found.")
 
 st.sidebar.markdown("---")
 st.sidebar.header("Step 1: Sync POS Data")
-uploaded_file = st.sidebar.file_uploader("Upload 'Daywise Report.csv'", type="csv")
+uploaded_file = st.sidebar.file_uploader("Upload 'Daywise Report.csv' (Generated NOW)", type="csv")
 
 st.title("🏦 FirstCry Automated Cashbook & Audit")
 st.markdown("---")
@@ -51,21 +50,24 @@ if uploaded_file:
     # --- RIGOROUS DATA CLEANING ---
     try:
         df_pos = pd.read_csv(uploaded_file)
-        # Remove hidden spaces from column headers
         df_pos.columns = [col.strip() for col in df_pos.columns]
-        # Remove hidden spaces from date values
         df_pos['Date'] = df_pos['Date'].astype(str).str.strip()
     except Exception as e:
         st.error(f"Error reading CSV: {e}")
         st.stop()
     
     with tab1:
-        st.header("Daily Cash Reconciliation")
+        st.header("Cash Reconciliation")
         with st.form("audit_form"):
-            audit_date = st.date_input("Select Audit Date", datetime.now())
+            col_date, col_shift, col_mgr = st.columns(3)
+            audit_date = col_date.date_input("Date", datetime.now())
+            shift_type = col_shift.selectbox("Audit Type", ["Day End Closing", "8:00 PM Shift Handover"])
+            mgr_name = col_mgr.text_input("Manager Name (Who is counting?)")
+
+            st.markdown("---")
             
             # Collection Entry
-            st.subheader("1. Manager Collection Entry")
+            st.subheader("1. Manager Collection Entry (Actuals)")
             c1, c2, c3 = st.columns(3)
             mgr_cash = c1.number_input("Actual Cash Collected (₹)", min_value=0.0, step=1.0)
             mgr_upi = c2.number_input("Actual UPI Collected (₹)", min_value=0.0, step=1.0)
@@ -99,59 +101,69 @@ if uploaded_file:
             submit = st.form_submit_button("Verify, Save & Show Variance")
 
         if submit:
-            search_date = audit_date.strftime("%d-%m-%Y")
-            # Find the row in the cleaned POS data
-            pos_row = df_pos[df_pos['Date'].str.contains(search_date)]
-            
-            if pos_row.empty:
-                st.error(f"❌ Date '{search_date}' not found in the uploaded report.")
+            if not mgr_name:
+                st.error("⚠️ Please enter Manager Name before saving!")
             else:
-                # Safer Extraction
-                p_cash = pos_row.iloc[0]['ReceivedCashAmount']
-                p_upi = pos_row.iloc[0]['WalletAmount']
-                p_card = pos_row.iloc[0]['CardAmount']
-
-                # Adjust for Manual Bills
-                exp_cash = p_cash + (manual_amt if manual_mode == "Cash" else 0)
-                exp_upi = p_upi + (manual_amt if manual_mode == "UPI" else 0)
-                exp_card = p_card + (manual_amt if manual_mode == "Card" else 0)
-
-                # Physical Total
-                physical = (n500*500)+(n200*200)+(n100*100)+(n50*50)+(n20*20)+(n10*10)+(c5*5)+(c2*2)+(c1*1)
+                search_date = audit_date.strftime("%d-%m-%Y")
+                pos_row = df_pos[df_pos['Date'].str.contains(search_date)]
                 
-                # Save to History
-                save_entry({
-                    "Date": search_date,
-                    "Actual_Cash": mgr_cash, "POS_Cash_Exp": exp_cash,
-                    "Actual_UPI": mgr_upi, "POS_UPI_Exp": exp_upi,
-                    "Actual_Card": mgr_card, "POS_Card_Exp": exp_card,
-                    "Physical_Drawer": physical, "Bank_Deposit": bank_dep
-                })
-                
-                # --- VISUAL VARIANCE REPORT ---
-                st.markdown("---")
-                st.header("Daily Audit Report")
-                
-                v1, v2, v3 = st.columns(3)
-                v1.metric("Cash vs POS", f"₹{mgr_cash}", f"{round(mgr_cash - exp_cash, 2)} Var", delta_color="inverse")
-                v2.metric("UPI vs POS", f"₹{mgr_upi}", f"{round(mgr_upi - exp_upi, 2)} Var", delta_color="inverse")
-                v3.metric("Card vs POS", f"₹{mgr_card}", f"{round(mgr_card - exp_card, 2)} Var", delta_color="inverse")
-                
-                if physical == mgr_cash:
-                    st.success(f"✅ Drawer Tally: Matches (₹{physical})")
-                    if mgr_cash == exp_cash: st.balloons()
+                if pos_row.empty:
+                    st.error(f"❌ Date '{search_date}' not found in the uploaded report.")
                 else:
-                    st.error(f"⚠️ Drawer Mismatch: Physical ₹{physical} vs Entered ₹{mgr_cash}")
+                    # Extraction
+                    p_cash = pos_row.iloc[0]['ReceivedCashAmount']
+                    p_upi = pos_row.iloc[0]['WalletAmount']
+                    p_card = pos_row.iloc[0]['CardAmount']
+
+                    # Adjust for Manual Bills
+                    exp_cash = p_cash + (manual_amt if manual_mode == "Cash" else 0)
+                    exp_upi = p_upi + (manual_amt if manual_mode == "UPI" else 0)
+                    exp_card = p_card + (manual_amt if manual_mode == "Card" else 0)
+
+                    # Physical Total
+                    physical = (n500*500)+(n200*200)+(n100*100)+(n50*50)+(n20*20)+(n10*10)+(c5*5)+(c2*2)+(c1*1)
+                    
+                    # Save to History
+                    save_entry({
+                        "Date": search_date,
+                        "Shift": shift_type,
+                        "Manager": mgr_name,
+                        "Actual_Cash": mgr_cash, "POS_Cash_Exp": exp_cash,
+                        "Actual_UPI": mgr_upi, "POS_UPI_Exp": exp_upi,
+                        "Actual_Card": mgr_card, "POS_Card_Exp": exp_card,
+                        "Physical_Drawer": physical, "Bank_Deposit": bank_dep
+                    })
+                    
+                    # --- DAILY RESULTS ---
+                    st.markdown("---")
+                    st.header(f"Audit Result: {shift_type} ({mgr_name})")
+                    st.info(f"💵 **Net Physical Cash Counted: ₹{physical}**")
+
+                    v1, v2, v3 = st.columns(3)
+                    v1.metric("Cash vs POS", f"₹{mgr_cash}", f"{round(mgr_cash - exp_cash, 2)} Var", delta_color="inverse")
+                    v2.metric("UPI vs POS", f"₹{mgr_upi}", f"{round(mgr_upi - exp_upi, 2)} Var", delta_color="inverse")
+                    v3.metric("Card vs POS", f"₹{mgr_card}", f"{round(mgr_card - exp_card, 2)} Var", delta_color="inverse")
+                    
+                    if physical == mgr_cash:
+                        st.success(f"✅ Drawer Tally: Matches (₹{physical})")
+                        if mgr_cash == exp_cash: st.balloons()
+                    else:
+                        st.error(f"⚠️ Drawer Mismatch: Physical ₹{physical} vs Entered ₹{mgr_cash}")
 
     with tab2:
-        st.header("Monthly Actuals vs POS Comparison")
+        st.header("Monthly Variance Log")
         if os.path.isfile(HISTORY_FILE):
             h_df = pd.read_csv(HISTORY_FILE)
             
-            # Key check for safety
-            needed = ['Actual_Cash', 'POS_Cash_Exp', 'Actual_UPI', 'POS_UPI_Exp']
-            if not all(k in h_df.columns for k in needed):
-                st.error("⚠️ History file format error. Please click 'Reset All History' in the sidebar.")
+            # --- CRITICAL FIX: FORCE NUMBERS ---
+            cols_to_numeric = ['Actual_Cash', 'POS_Cash_Exp', 'Actual_UPI', 'POS_UPI_Exp', 'Actual_Card', 'POS_Card_Exp', 'Physical_Drawer', 'Bank_Deposit']
+            for col in cols_to_numeric:
+                if col in h_df.columns:
+                    h_df[col] = pd.to_numeric(h_df[col], errors='coerce').fillna(0)
+
+            # Check for Columns
+            if 'Shift' not in h_df.columns:
+                 st.error("⚠️ Old History Format. Please click 'Reset All History' in the sidebar.")
             else:
                 # Calculate Variances
                 h_df['Cash_Var'] = h_df['Actual_Cash'] - h_df['POS_Cash_Exp']
@@ -159,22 +171,32 @@ if uploaded_file:
                 h_df['Card_Var'] = h_df['Actual_Card'] - h_df['POS_Card_Exp']
                 h_df['Drawer_Diff'] = h_df['Physical_Drawer'] - h_df['Actual_Cash']
 
-                # Display Columns
-                cols = ['Date', 'Actual_Cash', 'POS_Cash_Exp', 'Cash_Var', 
-                        'Actual_UPI', 'POS_UPI_Exp', 'UPI_Var',
-                        'Actual_Card', 'POS_Card_Exp', 'Card_Var', 'Drawer_Diff']
+                # Display Table
+                display_cols = ['Date', 'Shift', 'Manager', 
+                                'Actual_Cash', 'POS_Cash_Exp', 'Cash_Var',
+                                'UPI_Var', 'Card_Var', 'Drawer_Diff', 'Bank_Deposit']
 
-                # --- ERROR FIX: Custom Styler instead of background_gradient ---
                 st.dataframe(
-                    h_df[cols].style.applymap(color_variance, subset=['Cash_Var', 'UPI_Var', 'Card_Var', 'Drawer_Diff']),
+                    h_df[display_cols].style.applymap(color_variance, subset=['Cash_Var', 'UPI_Var', 'Card_Var', 'Drawer_Diff']),
                     use_container_width=True
                 )
                 
+                # --- NET VARIANCE SUMMARY ---
                 st.markdown("---")
-                m1, m2 = st.columns(2)
-                m1.metric("Net Cash Variance", f"₹{round(h_df['Cash_Var'].sum(), 2)}", delta_color="inverse")
-                m2.metric("Total Bank Deposits", f"₹{round(h_df['Bank_Deposit'].sum(), 2)}")
+                st.subheader("Monthly Net Performance")
+                
+                m1, m2, m3, m4 = st.columns(4)
+                # Force Sum Calculation
+                net_cash_var = h_df['Cash_Var'].sum()
+                net_upi_var = h_df['UPI_Var'].sum()
+                net_card_var = h_df['Card_Var'].sum()
+                total_deposit = h_df['Bank_Deposit'].sum()
+
+                m1.metric("Net Cash Variance", f"₹{round(net_cash_var, 2)}", delta_color="inverse")
+                m2.metric("Net UPI Variance", f"₹{round(net_upi_var, 2)}", delta_color="inverse")
+                m3.metric("Net Card Variance", f"₹{round(net_card_var, 2)}", delta_color="inverse")
+                m4.metric("Total Bank Deposits", f"₹{round(total_deposit, 2)}")
         else:
-            st.info("No entries yet. Submit an audit to see history.")
+            st.info("No entries yet.")
 else:
     st.warning("Please upload the POS Report CSV in the sidebar.")
