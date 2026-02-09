@@ -5,20 +5,38 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="FirstCry Store Auditor", layout="wide")
 
-# --- CONNECT TO GOOGLE SHEET ---
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- 1. SAFE CONNECTION SETUP ---
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error("🚨 Connection Error: Could not talk to Google Sheets. Check your Secrets!")
+    st.stop()
 
 def get_history():
-    # Read data (TTL=0 ensures we always get the latest update)
-    return conn.read(worksheet="Sheet1", ttl=0)
+    # Adding error handling for empty sheets
+    try:
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        return df
+    except:
+        return pd.DataFrame() # Return empty if sheet is blank
 
 def save_entry_to_sheet(new_entry):
-    # 1. Fetch current data
-    df = get_history()
-    # 2. Append new row
-    updated_df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
-    # 3. Update Sheet
-    conn.update(worksheet="Sheet1", data=updated_df)
+    try:
+        df = get_history()
+        # Convert new_entry dict to DataFrame
+        new_row = pd.DataFrame([new_entry])
+        
+        # Robust concatenation (handles empty history)
+        if df.empty:
+            updated_df = new_row
+        else:
+            updated_df = pd.concat([df, new_row], ignore_index=True)
+            
+        conn.update(worksheet="Sheet1", data=updated_df)
+        return True
+    except Exception as e:
+        st.error(f"Save Failed: {str(e)}")
+        return False
 
 # --- COLORING FUNCTION ---
 def color_variance(val):
@@ -34,7 +52,7 @@ def color_variance(val):
 st.title("🏦 FirstCry Cloud Cashbook")
 st.markdown("---")
 
-# 1. SIDEBAR
+# SIDEBAR
 st.sidebar.header("Step 1: Sync POS Data")
 uploaded_file = st.sidebar.file_uploader("Upload 'Daywise Report.csv'", type="csv")
 
@@ -42,12 +60,13 @@ if st.sidebar.button("🔄 Refresh Data from Cloud"):
     st.cache_data.clear()
     st.rerun()
 
-# Tabs
+# TABS
 tab1, tab2 = st.tabs(["📝 Daily Entry", "📊 Monthly Dashboard"])
 
 if uploaded_file:
     try:
         df_pos = pd.read_csv(uploaded_file)
+        # Clean column names and date values
         df_pos.columns = [col.strip() for col in df_pos.columns]
         df_pos['Date'] = df_pos['Date'].astype(str).str.strip()
     except Exception as e:
@@ -90,13 +109,13 @@ if uploaded_file:
 
         if submit:
             if not mgr_name:
-                st.error("Enter Manager Name!")
+                st.error("⚠️ Please enter Manager Name!")
             else:
                 search_date = audit_date.strftime("%d-%m-%Y")
                 pos_row = df_pos[df_pos['Date'].str.contains(search_date)]
                 
                 if pos_row.empty:
-                    st.error(f"Date {search_date} not found in POS Report.")
+                    st.error(f"❌ Date {search_date} not found in POS Report.")
                 else:
                     p_cash = pos_row.iloc[0]['ReceivedCashAmount']
                     p_upi = pos_row.iloc[0]['WalletAmount']
@@ -119,18 +138,16 @@ if uploaded_file:
                         "Bank_Deposit": bank_dep
                     }
                     
-                    try:
-                        save_entry_to_sheet(entry)
+                    if save_entry_to_sheet(entry):
                         st.success("✅ Saved to Google Sheet!")
                         st.balloons()
-                    except Exception as e:
-                        st.error(f"Google Sheet Error: {e}")
 
     with tab2:
         st.header("Monthly Cloud Dashboard")
-        try:
-            h_df = get_history()
-            
+        h_df = get_history()
+        
+        if not h_df.empty:
+            # Force numeric types to prevent "sum" errors
             cols_to_numeric = ['Actual_Cash', 'POS_Cash_Exp', 'Cash_Var', 'UPI_Var', 'Card_Var', 'Drawer_Diff', 'Bank_Deposit']
             for col in cols_to_numeric:
                 if col in h_df.columns:
@@ -146,11 +163,15 @@ if uploaded_file:
             
             st.markdown("---")
             m1, m2, m3 = st.columns(3)
-            m1.metric("Net Cash Var", f"₹{round(h_df['Cash_Var'].sum(), 2)}", delta_color="inverse")
-            m2.metric("Net UPI Var", f"₹{round(h_df['UPI_Var'].sum(), 2)}", delta_color="inverse")
-            m3.metric("Bank Deposits", f"₹{round(h_df['Bank_Deposit'].sum(), 2)}")
+            # Safe summing
+            cash_sum = h_df['Cash_Var'].sum() if 'Cash_Var' in h_df.columns else 0
+            upi_sum = h_df['UPI_Var'].sum() if 'UPI_Var' in h_df.columns else 0
+            dep_sum = h_df['Bank_Deposit'].sum() if 'Bank_Deposit' in h_df.columns else 0
             
-        except Exception as e:
-            st.info("Connecting to Google Sheet... (If this takes too long, check Secrets)")
+            m1.metric("Net Cash Var", f"₹{round(cash_sum, 2)}", delta_color="inverse")
+            m2.metric("Net UPI Var", f"₹{round(upi_sum, 2)}", delta_color="inverse")
+            m3.metric("Bank Deposits", f"₹{round(dep_sum, 2)}")
+        else:
+            st.info("No data found in Google Sheet. Add your first entry!")
 else:
-    st.warning("Upload POS Report first.")
+    st.warning("Please upload the POS Report CSV in the sidebar.")
