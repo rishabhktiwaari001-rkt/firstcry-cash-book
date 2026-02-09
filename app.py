@@ -11,14 +11,29 @@ HISTORY_FILE = "cashbook_history.csv"
 def save_entry(data):
     file_exists = os.path.isfile(HISTORY_FILE)
     df_history = pd.DataFrame([data])
+    # Append to file
     df_history.to_csv(HISTORY_FILE, mode='a', index=False, header=not file_exists)
 
-# --- ADMIN TOOLS (SIDEBAR) ---
+# --- COLORING FUNCTION (No Matplotlib Needed) ---
+def color_variance(val):
+    """
+    Colors negative values RED and positive values GREEN.
+    """
+    color = ''
+    if isinstance(val, (int, float)):
+        if val < -0.1: # Negative (Shortage)
+            color = 'background-color: #ffcccc; color: black'
+        elif val > 0.1: # Positive (Excess)
+            color = 'background-color: #ccffcc; color: black'
+    return color
+
+# --- SIDEBAR TOOLS ---
 st.sidebar.header("🛠️ Admin Controls")
 if st.sidebar.button("🗑️ Reset All History"):
     if os.path.exists(HISTORY_FILE):
         os.remove(HISTORY_FILE)
-        st.sidebar.success("History cleared! You can now start fresh.")
+        st.sidebar.success("History cleared!")
+        st.rerun()
     else:
         st.sidebar.info("No history file found.")
 
@@ -34,11 +49,15 @@ tab1, tab2 = st.tabs(["📝 Daily Entry & Audit", "📊 Monthly Variance Dashboa
 
 if uploaded_file:
     # --- RIGOROUS DATA CLEANING ---
-    df_pos = pd.read_csv(uploaded_file)
-    # Remove hidden spaces from column headers
-    df_pos.columns = [col.strip() for col in df_pos.columns]
-    # Remove hidden spaces from date values
-    df_pos['Date'] = df_pos['Date'].astype(str).str.strip()
+    try:
+        df_pos = pd.read_csv(uploaded_file)
+        # Remove hidden spaces from column headers
+        df_pos.columns = [col.strip() for col in df_pos.columns]
+        # Remove hidden spaces from date values
+        df_pos['Date'] = df_pos['Date'].astype(str).str.strip()
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        st.stop()
     
     with tab1:
         st.header("Daily Cash Reconciliation")
@@ -46,7 +65,7 @@ if uploaded_file:
             audit_date = st.date_input("Select Audit Date", datetime.now())
             
             # Collection Entry
-            st.subheader("1. Manager Collection Entry (Actuals)")
+            st.subheader("1. Manager Collection Entry")
             c1, c2, c3 = st.columns(3)
             mgr_cash = c1.number_input("Actual Cash Collected (₹)", min_value=0.0, step=1.0)
             mgr_upi = c2.number_input("Actual UPI Collected (₹)", min_value=0.0, step=1.0)
@@ -140,7 +159,21 @@ if uploaded_file:
                 h_df['Card_Var'] = h_df['Actual_Card'] - h_df['POS_Card_Exp']
                 h_df['Drawer_Diff'] = h_df['Physical_Drawer'] - h_df['Actual_Cash']
 
-                st.dataframe(h_df.style.background_gradient(cmap='RdYlGn', subset=['Cash_Var', 'UPI_Var', 'Card_Var']), use_container_width=True)
+                # Display Columns
+                cols = ['Date', 'Actual_Cash', 'POS_Cash_Exp', 'Cash_Var', 
+                        'Actual_UPI', 'POS_UPI_Exp', 'UPI_Var',
+                        'Actual_Card', 'POS_Card_Exp', 'Card_Var', 'Drawer_Diff']
+
+                # --- ERROR FIX: Custom Styler instead of background_gradient ---
+                st.dataframe(
+                    h_df[cols].style.applymap(color_variance, subset=['Cash_Var', 'UPI_Var', 'Card_Var', 'Drawer_Diff']),
+                    use_container_width=True
+                )
+                
+                st.markdown("---")
+                m1, m2 = st.columns(2)
+                m1.metric("Net Cash Variance", f"₹{round(h_df['Cash_Var'].sum(), 2)}", delta_color="inverse")
+                m2.metric("Total Bank Deposits", f"₹{round(h_df['Bank_Deposit'].sum(), 2)}")
         else:
             st.info("No entries yet. Submit an audit to see history.")
 else:
