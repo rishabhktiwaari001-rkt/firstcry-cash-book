@@ -1,59 +1,60 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import os
 
-st.set_page_config(page_title="Store Cash Auditor", layout="wide")
+st.set_page_config(page_title="FirstCry Store Auditor", layout="wide")
 
-# Custom Styling
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- DATABASE LOGIC ---
+# This creates a file to store all manager entries permanently
+HISTORY_FILE = "cashbook_history.csv"
 
-st.title("🏦 Cashbook Audit & Performance Dashboard")
+def save_entry(data):
+    file_exists = os.path.isfile(HISTORY_FILE)
+    df_history = pd.DataFrame([data])
+    df_history.to_csv(HISTORY_FILE, mode='a', index=False, header=not file_exists)
+
+# --- APP INTERFACE ---
+st.title("🏦 FirstCry Automated Cashbook")
 st.markdown("---")
 
 # 1. SIDEBAR: POS DATA SYNC
-st.sidebar.header("📊 Step 1: Data Sync")
+st.sidebar.header("Step 1: Admin POS Sync")
 uploaded_file = st.sidebar.file_uploader("Upload Today's Daywise Report (CSV)", type="csv")
 
 # Create Tabs
-tab1, tab2 = st.tabs(["📝 Daily Entry & Audit", "📈 Monthly Dashboard"])
+tab1, tab2 = st.tabs(["📝 Daily Entry & Audit", "📊 Monthly Cashbook Report"])
 
 if uploaded_file:
-    # Load and Clean Data
-    df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip()
-    df['Date'] = df['Date'].astype(str).str.strip()
+    df_pos = pd.read_csv(uploaded_file)
+    df_pos.columns = df_pos.columns.str.strip()
+    df_pos['Date'] = df_pos['Date'].astype(str).str.strip()
 
     with tab1:
-        st.header("Daily Audit Entry")
+        st.header("Today's Cash Reconciliation")
         with st.form("audit_form"):
             audit_date = st.date_input("Audit Date", datetime.now())
             
-            # Row 1: Manager Entry
+            # Collection Entry
             st.subheader("1. Manager Collection Entry")
             c1, c2, c3 = st.columns(3)
-            mgr_cash = c1.number_input("Cash in Drawer (Actual) (₹)", min_value=0.0, step=1.0)
-            mgr_upi = c2.number_input("UPI/Wallet Total (Actual) (₹)", min_value=0.0, step=1.0)
-            mgr_card = c3.number_input("Card Sales Total (Actual) (₹)", min_value=0.0, step=1.0)
+            mgr_cash = c1.number_input("Actual Cash in Drawer (₹)", min_value=0.0, step=1.0)
+            mgr_upi = c2.number_input("Actual UPI Collected (₹)", min_value=0.0, step=1.0)
+            mgr_card = c3.number_input("Actual Card Collected (₹)", min_value=0.0, step=1.0)
             
-            # Row 2: Manual Billing
+            # Manual Billing
             st.markdown("---")
-            st.subheader("2. Manual Billing (Not in POS)")
+            st.subheader("2. Manual Billing (Sales not in POS)")
             m_col1, m_col2 = st.columns(2)
             manual_amt = m_col1.number_input("Manual Sale Amount (₹)", min_value=0.0, step=1.0)
-            manual_mode = m_col2.selectbox("Payment Mode for Manual Sale", ["None", "Cash", "UPI", "Card"])
+            manual_mode = m_col2.selectbox("Mode", ["None", "Cash", "UPI", "Card"])
 
-            # Row 3: Denominations
+            # Denominations
             st.markdown("---")
             st.subheader("3. Physical Cash Denominations")
-            
             col_notes, col_coins = st.columns(2)
             with col_notes:
-                st.write("**Currency Notes**")
+                st.write("**Notes**")
                 n500 = st.number_input("500 x", min_value=0, step=1)
                 n200 = st.number_input("200 x", min_value=0, step=1)
                 n100 = st.number_input("100 x", min_value=0, step=1)
@@ -66,68 +67,71 @@ if uploaded_file:
                 c5 = st.number_input("5 x", min_value=0, step=1)
                 c2 = st.number_input("2 x", min_value=0, step=1)
                 c1 = st.number_input("1 x", min_value=0, step=1)
-                st.write(" ") # Spacer
-                bank_dep = st.number_input("Amount Deposited to Bank today (₹)", min_value=0.0, step=1.0)
+                st.write("---")
+                bank_dep = st.number_input("Bank Deposit (₹)", min_value=0.0)
 
-            submit = st.form_submit_button("Verify & Run Audit")
+            submit = st.form_submit_button("Verify & Save to Cashbook")
 
         if submit:
             search_date = audit_date.strftime("%d-%m-%Y")
-            pos_row = df[df['Date'].str.contains(audit_date.strftime("%d-%m-%Y"))]
+            pos_row = df_pos[df_pos['Date'].str.contains(audit_date.strftime("%d-%m-%Y"))]
             
             if pos_row.empty:
-                st.error(f"❌ Error: Date {search_date} not found in the uploaded report.")
+                st.error(f"Date {search_date} not found in POS report.")
             else:
-                # 1. System Calculations (POS + Manual)
-                pos_cash = pos_row.iloc[0]['ReceivedCashAmount']
-                pos_upi = pos_row.iloc[0]['WalletAmount']
-                pos_card = pos_row.iloc[0]['CardAmount']
-
-                # Adjust expectations based on manual billing
-                expected_cash = pos_cash + (manual_amt if manual_mode == "Cash" else 0)
-                expected_upi = pos_upi + (manual_amt if manual_mode == "UPI" else 0)
-                expected_card = pos_card + (manual_amt if manual_mode == "Card" else 0)
-
-                # 2. Physical Cash Calculation
-                note_val = (n500*500) + (n200*200) + (n100*100) + (n50*50) + (n20*20) + (n10*10)
-                coin_val = (c5*5) + (c2*2) + (c1*1)
-                total_physical = note_val + coin_val
-
-                st.markdown("---")
-                st.header("Step 3: Audit Results")
-
-                # Results: Tally Check
-                if total_physical == mgr_cash:
-                    st.success(f"✅ Cash Drawer Tally: PERFECT. Physical cash matches Manager entry (₹{total_physical}).")
-                else:
-                    st.error(f"❌ Cash Drawer Mismatch! Physical: ₹{total_physical} vs Entry: ₹{mgr_cash}. Gap: ₹{round(total_physical - mgr_cash, 2)}")
-
-                # Comparison Metrics
-                r1, r2, r3 = st.columns(3)
-                r1.metric("Cash (POS+Manual)", f"₹{mgr_cash}", f"{round(mgr_cash - expected_cash, 2)} Var", delta_color="inverse")
-                r2.metric("UPI (POS+Manual)", f"₹{mgr_upi}", f"{round(mgr_upi - expected_upi, 2)} Var", delta_color="inverse")
-                r3.metric("Card (POS+Manual)", f"₹{mgr_card}", f"{round(mgr_card - expected_card, 2)} Var", delta_color="inverse")
+                # Calculations
+                note_total = (n500*500) + (n200*200) + (n100*100) + (n50*50) + (n20*20) + (n10*10)
+                coin_total = (c5*5) + (c2*2) + (c1*1)
+                grand_physical = note_total + coin_total
                 
-                if (mgr_cash == expected_cash) and (total_physical == mgr_cash):
-                    st.balloons()
+                # Save Data
+                entry_data = {
+                    "Date": search_date,
+                    "Actual_Cash": mgr_cash,
+                    "Actual_UPI": mgr_upi,
+                    "Actual_Card": mgr_card,
+                    "Manual_Amt": manual_amt,
+                    "Manual_Mode": manual_mode,
+                    "Physical_Drawer": grand_physical,
+                    "Bank_Deposit": bank_dep,
+                    "Timestamp": datetime.now()
+                }
+                save_entry(entry_data)
+                
+                st.success(f"✅ Data saved to Monthly Cashbook! Physical Count: ₹{grand_physical}")
+                st.balloons()
 
     with tab2:
-        st.header("Monthly Performance Dashboard")
-        st.write("Summary of all store activities based on the current POS report.")
+        st.header("Actual Cashbook vs POS Report")
         
-        # Clean data for display
-        display_df = df[['Date', 'TotalBills', 'ReceivedCashAmount', 'WalletAmount', 'CardAmount', 'TotalPrice']].copy()
-        display_df.columns = ['Date', 'Bills', 'Cash (₹)', 'UPI (₹)', 'Card (₹)', 'Total Sales (₹)']
-        
-        st.dataframe(display_df, use_container_width=True)
+        if os.path.isfile(HISTORY_FILE):
+            # Load Manager Actuals
+            df_actuals = pd.read_csv(HISTORY_FILE)
+            
+            # Merge with POS Data
+            # Note: We take the latest POS report uploaded and compare
+            comparison_df = df_actuals.merge(df_pos[['Date', 'ReceivedCashAmount', 'WalletAmount', 'CardAmount']], on="Date", how="left")
+            
+            # Rename for Clarity
+            comparison_df = comparison_df.rename(columns={
+                'ReceivedCashAmount': 'POS_Cash',
+                'WalletAmount': 'POS_UPI',
+                'CardAmount': 'POS_Card'
+            })
 
-        st.markdown("---")
-        # Summary Statistics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Sales", f"₹{round(df['TotalPrice'].sum(), 2)}")
-        m2.metric("Total Cash", f"₹{round(df['ReceivedCashAmount'].sum(), 2)}")
-        m3.metric("Total Bills", f"{df['TotalBills'].sum()}")
-        m4.metric("Avg Bill Value", f"₹{round(df['TotalPrice'].sum() / df['TotalBills'].sum(), 2)}")
+            # Create the Side-by-Side Display
+            # Logic: Compare Mgr Actuals + Manual vs POS
+            st.write("### Monthly Comparison Table")
+            st.dataframe(comparison_df[['Date', 'Actual_Cash', 'POS_Cash', 'Actual_UPI', 'POS_UPI', 'Actual_Card', 'POS_Card', 'Physical_Drawer', 'Bank_Deposit']], use_container_width=True)
+            
+            # Monthly Summary Metrics
+            st.markdown("---")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Actual Cash", f"₹{round(comparison_df['Actual_Cash'].sum(), 2)}")
+            m2.metric("Total Bank Deposits", f"₹{round(comparison_df['Bank_Deposit'].sum(), 2)}")
+            m3.metric("Total Physical in Drawer", f"₹{round(comparison_df['Physical_Drawer'].sum(), 2)}")
+        else:
+            st.info("No entries found yet. Complete a Daily Audit to see the Monthly Dashboard.")
 
 else:
-    st.warning("Please upload the Daywise Report CSV in the sidebar to view the dashboard.")
+    st.warning("Please upload the Daywise Report CSV in the sidebar to begin.")
