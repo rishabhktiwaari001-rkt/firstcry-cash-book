@@ -6,7 +6,6 @@ import os
 st.set_page_config(page_title="FirstCry Store Auditor", layout="wide")
 
 # --- DATABASE LOGIC ---
-# This creates a file to store all manager entries permanently
 HISTORY_FILE = "cashbook_history.csv"
 
 def save_entry(data):
@@ -15,15 +14,15 @@ def save_entry(data):
     df_history.to_csv(HISTORY_FILE, mode='a', index=False, header=not file_exists)
 
 # --- APP INTERFACE ---
-st.title("🏦 FirstCry Automated Cashbook")
+st.title("🏦 FirstCry Automated Cashbook & Audit")
 st.markdown("---")
 
 # 1. SIDEBAR: POS DATA SYNC
 st.sidebar.header("Step 1: Admin POS Sync")
-uploaded_file = st.sidebar.file_uploader("Upload Today's Daywise Report (CSV)", type="csv")
+uploaded_file = st.sidebar.file_uploader("Upload 'Daywise Report.csv'", type="csv")
 
 # Create Tabs
-tab1, tab2 = st.tabs(["📝 Daily Entry & Audit", "📊 Monthly Cashbook Report"])
+tab1, tab2 = st.tabs(["📝 Daily Entry & Audit", "📊 Monthly Variance Dashboard"])
 
 if uploaded_file:
     df_pos = pd.read_csv(uploaded_file)
@@ -93,45 +92,57 @@ if uploaded_file:
                     "Manual_Amt": manual_amt,
                     "Manual_Mode": manual_mode,
                     "Physical_Drawer": grand_physical,
-                    "Bank_Deposit": bank_dep,
-                    "Timestamp": datetime.now()
+                    "Bank_Deposit": bank_dep
                 }
                 save_entry(entry_data)
                 
                 st.success(f"✅ Data saved to Monthly Cashbook! Physical Count: ₹{grand_physical}")
-                st.balloons()
+                
+                # Immediate Audit Result
+                st.info(f"Summary: Physical ₹{grand_physical} | Manager Entered ₹{mgr_cash}")
+                if grand_physical != mgr_cash:
+                    st.error(f"Variance in drawer: ₹{grand_physical - mgr_cash}")
+                else:
+                    st.balloons()
 
     with tab2:
-        st.header("Actual Cashbook vs POS Report")
+        st.header("Actual Cashbook vs POS Report (With Variance)")
         
         if os.path.isfile(HISTORY_FILE):
-            # Load Manager Actuals
             df_actuals = pd.read_csv(HISTORY_FILE)
             
-            # Merge with POS Data
-            # Note: We take the latest POS report uploaded and compare
+            # Merge with POS Data for side-by-side view
             comparison_df = df_actuals.merge(df_pos[['Date', 'ReceivedCashAmount', 'WalletAmount', 'CardAmount']], on="Date", how="left")
             
-            # Rename for Clarity
             comparison_df = comparison_df.rename(columns={
                 'ReceivedCashAmount': 'POS_Cash',
                 'WalletAmount': 'POS_UPI',
                 'CardAmount': 'POS_Card'
             })
 
-            # Create the Side-by-Side Display
-            # Logic: Compare Mgr Actuals + Manual vs POS
-            st.write("### Monthly Comparison Table")
-            st.dataframe(comparison_df[['Date', 'Actual_Cash', 'POS_Cash', 'Actual_UPI', 'POS_UPI', 'Actual_Card', 'POS_Card', 'Physical_Drawer', 'Bank_Deposit']], use_container_width=True)
+            # --- CALCULATE VARIANCE COLUMNS ---
+            comparison_df['Cash_Variance'] = comparison_df['Actual_Cash'] - comparison_df['POS_Cash']
+            comparison_df['UPI_Variance'] = comparison_df['Actual_UPI'] - comparison_df['POS_UPI']
+            comparison_df['Card_Variance'] = comparison_df['Actual_Card'] - comparison_df['POS_Card']
+            comparison_df['Drawer_Diff'] = comparison_df['Physical_Drawer'] - comparison_df['Actual_Cash']
+
+            # Display Table
+            st.write("### Monthly Audit Table")
+            cols = ['Date', 'Actual_Cash', 'POS_Cash', 'Cash_Variance', 
+                    'Actual_UPI', 'POS_UPI', 'UPI_Variance', 
+                    'Actual_Card', 'POS_Card', 'Card_Variance',
+                    'Physical_Drawer', 'Drawer_Diff', 'Bank_Deposit']
             
-            # Monthly Summary Metrics
+            st.dataframe(comparison_df[cols].style.highlight_min(subset=['Cash_Variance', 'UPI_Variance', 'Card_Variance'], color='#ffcccc'), use_container_width=True)
+            
+            # Monthly Totals
             st.markdown("---")
             m1, m2, m3 = st.columns(3)
             m1.metric("Total Actual Cash", f"₹{round(comparison_df['Actual_Cash'].sum(), 2)}")
-            m2.metric("Total Bank Deposits", f"₹{round(comparison_df['Bank_Deposit'].sum(), 2)}")
-            m3.metric("Total Physical in Drawer", f"₹{round(comparison_df['Physical_Drawer'].sum(), 2)}")
+            m2.metric("Total Cash Variance", f"₹{round(comparison_df['Cash_Variance'].sum(), 2)}", delta=f"{round(comparison_df['Cash_Variance'].sum(), 2)}", delta_color="inverse")
+            m3.metric("Total Bank Deposits", f"₹{round(comparison_df['Bank_Deposit'].sum(), 2)}")
         else:
-            st.info("No entries found yet. Complete a Daily Audit to see the Monthly Dashboard.")
+            st.info("No entries found yet. Complete an audit to see the dashboard.")
 
 else:
-    st.warning("Please upload the Daywise Report CSV in the sidebar to begin.")
+    st.warning("Please upload the Daywise Report CSV in the sidebar.")
